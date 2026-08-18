@@ -19,6 +19,10 @@
   --user-bg: #F5F5F5;
   --black: #000000;
   --white: #FFFFFF;
+  --error-bg: #FEF2F2;
+  --error-border: #FEE2E2;
+  --error-text: #DC2626;
+  --overlay-bg: rgba(255,255,255,0.92);
   --radius-pill: 9999px;
   --radius-lg: 16px;
   --radius-md: 12px;
@@ -26,6 +30,29 @@
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
   --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
 }
+
+[data-theme="dark"] {
+  --bg: #0A0A0A;
+  --bg-secondary: #111111;
+  --bg-tertiary: #1A1A1A;
+  --text: #E5E5E5;
+  --text-secondary: #D4D4D4;
+  --text-muted: #737373;
+  --text-placeholder: #525252;
+  --border: #262626;
+  --border-dark: #333333;
+  --user-bg: #1A1A1A;
+  --black: #FFFFFF;
+  --white: #000000;
+  --error-bg: #1A0000;
+  --error-border: #330000;
+  --error-text: #EF4444;
+  --overlay-bg: rgba(0,0,0,0.92);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
+}
+
 html, body { height: 100%; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -33,6 +60,7 @@ body {
   color: var(--text);
   display: flex;
   flex-direction: column;
+  transition: background 0.3s, color 0.3s;
 }
 
 /* Header */
@@ -42,10 +70,12 @@ body {
   padding: 12px 24px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
   position: relative;
   z-index: 10;
+  transition: background 0.3s, border-color 0.3s;
 }
 .header-left {
   display: flex;
@@ -57,6 +87,11 @@ body {
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.02em;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .model-selector {
   display: flex;
@@ -80,7 +115,7 @@ body {
   font-family: inherit;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.3s, color 0.3s;
   min-width: 180px;
 }
 .model-select-wrapper select:focus {
@@ -110,12 +145,40 @@ body {
   font-size: 0.85rem;
   font-family: inherit;
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.1s;
+  transition: opacity 0.2s, transform 0.1s, background 0.3s, color 0.3s;
   white-space: nowrap;
 }
 .btn-load:hover { opacity: 0.85; }
 .btn-load:active { transform: scale(0.97); }
 .btn-load:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* Theme toggle */
+.btn-theme {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.2s, border-color 0.2s, color 0.3s;
+  flex-shrink: 0;
+}
+.btn-theme:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--text-muted);
+}
+.btn-theme svg {
+  width: 18px;
+  height: 18px;
+}
+.btn-theme .icon-sun { display: none; }
+.btn-theme .icon-moon { display: block; }
+[data-theme="dark"] .btn-theme .icon-sun { display: block; }
+[data-theme="dark"] .btn-theme .icon-moon { display: none; }
 
 /* Status bar */
 .status-bar {
@@ -127,6 +190,7 @@ body {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+  transition: background 0.3s, border-color 0.3s;
 }
 .status-dot {
   width: 7px;
@@ -134,15 +198,22 @@ body {
   border-radius: 50%;
   background: var(--border-dark);
   flex-shrink: 0;
+  transition: background 0.3s;
 }
 .status-dot.loading { background: var(--text-muted); animation: pulse 1s infinite; }
-.status-dot.ready { background: var(--black); }
+.status-dot.ready { background: var(--text); }
 .status-dot.error { background: #DC2626; }
+[data-theme="dark"] .status-dot.error { background: #EF4444; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.status-text {
+  color: var(--text);
+  transition: color 0.3s;
+}
 .status-detail {
   color: var(--text-muted);
   font-size: 0.75rem;
   margin-left: auto;
+  transition: color 0.3s;
 }
 
 /* Chat area */
@@ -180,6 +251,7 @@ body {
   margin: 0;
   margin-left: auto;
   border-bottom-right-radius: 4px;
+  transition: background 0.3s;
 }
 .message.bot {
   align-self: flex-start;
@@ -188,15 +260,16 @@ body {
   padding: 0;
 }
 .message.error {
-  background: #FEF2F2;
-  border: 1px solid #FEE2E2;
-  color: #DC2626;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
   align-self: center;
   max-width: 90%;
   padding: 12px 16px;
   border-radius: var(--radius-md);
   font-size: 0.9rem;
   text-align: center;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
 }
 .message.system {
   align-self: center;
@@ -208,6 +281,7 @@ body {
   text-align: center;
   padding: 8px 16px;
   border-radius: var(--radius-pill);
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
 }
 .message .thinking {
   color: var(--text-muted);
@@ -221,6 +295,7 @@ body {
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
   font-size: 0.85em;
   border: 1px solid var(--border);
+  transition: background 0.3s, border-color 0.3s;
 }
 .message pre {
   background: var(--bg-tertiary);
@@ -229,6 +304,7 @@ body {
   overflow-x: auto;
   margin: 12px 0;
   border: 1px solid var(--border);
+  transition: background 0.3s, border-color 0.3s;
 }
 .message pre code {
   background: none;
@@ -249,6 +325,7 @@ body {
   background: var(--bg);
   padding: 16px 24px;
   justify-content: center;
+  transition: background 0.3s, border-color 0.3s;
 }
 .input-wrapper {
   width: 100%;
@@ -264,7 +341,7 @@ body {
   border-radius: var(--radius-lg);
   padding: 8px 8px 8px 12px;
   box-shadow: var(--shadow-md);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.3s;
 }
 .input-box:focus-within {
   border-color: var(--text);
@@ -305,6 +382,7 @@ body {
   min-height: 36px;
   max-height: 200px;
   line-height: 1.5;
+  transition: color 0.3s;
 }
 .input-box textarea::placeholder { color: var(--text-placeholder); }
 .btn-send {
@@ -318,7 +396,7 @@ body {
   border: none;
   border-radius: 50%;
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.1s;
+  transition: opacity 0.2s, transform 0.1s, background 0.3s, color 0.3s;
   flex-shrink: 0;
 }
 .btn-send:hover { opacity: 0.85; }
@@ -333,7 +411,7 @@ body {
 .loading-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(255,255,255,0.92);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -341,7 +419,7 @@ body {
   z-index: 100;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.3s;
+  transition: opacity 0.3s, background 0.3s;
 }
 .loading-overlay.visible { opacity: 1; pointer-events: all; }
 .loading-content {
@@ -354,10 +432,11 @@ body {
   width: 40px;
   height: 40px;
   border: 2px solid var(--border);
-  border-top-color: var(--black);
+  border-top-color: var(--text);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin: 0 auto 20px;
+  transition: border-color 0.3s;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-content p { font-size: 1rem; font-weight: 500; }
@@ -383,12 +462,14 @@ body {
   line-height: 1.2;
   margin-bottom: 12px;
   letter-spacing: -0.02em;
+  transition: color 0.3s;
 }
 .empty-state .subtitle {
   font-size: 1rem;
   color: var(--text-muted);
   margin-bottom: 0;
   font-weight: 400;
+  transition: color 0.3s;
 }
 .empty-state .landing-input-area {
   margin-top: 40px;
@@ -422,19 +503,37 @@ body {
   <div class="header-left">
     <span class="logo">LLM Chat</span>
   </div>
-  <div class="model-selector">
-    <div class="model-select-wrapper">
-      <select id="modelSelect">
-        <option value="">Select model</option>
-      </select>
+  <div class="header-right">
+    <div class="model-selector">
+      <div class="model-select-wrapper">
+        <select id="modelSelect">
+          <option value="">Select model</option>
+        </select>
+      </div>
+      <button class="btn-load" id="btnLoad" disabled>Load</button>
     </div>
-    <button class="btn-load" id="btnLoad" disabled>Load</button>
+    <button class="btn-theme" id="btnTheme" title="Toggle dark mode">
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+      </svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5"></circle>
+        <line x1="12" y1="1" x2="12" y2="3"></line>
+        <line x1="12" y1="21" x2="12" y2="23"></line>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+        <line x1="1" y1="12" x2="3" y2="12"></line>
+        <line x1="21" y1="12" x2="23" y2="12"></line>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+      </svg>
+    </button>
   </div>
 </div>
 
 <div class="status-bar">
   <div class="status-dot" id="statusDot"></div>
-  <span id="statusText">No model loaded</span>
+  <span class="status-text" id="statusText">No model loaded</span>
   <span class="status-detail" id="statusDetail"></span>
 </div>
 
@@ -524,6 +623,7 @@ const modelSelect      = document.getElementById('modelSelect');
 const btnLoad          = document.getElementById('btnLoad');
 const btnSend          = document.getElementById('btnSend');
 const btnSendLanding   = document.getElementById('btnSendLanding');
+const btnTheme         = document.getElementById('btnTheme');
 const inputText        = document.getElementById('inputText');
 const inputTextLanding = document.getElementById('inputTextLanding');
 const messagesDiv      = document.getElementById('messages');
@@ -535,6 +635,35 @@ const statusDetail     = document.getElementById('statusDetail');
 const loadingOverlay   = document.getElementById('loadingOverlay');
 const loadingText      = document.getElementById('loadingText');
 const loadingSub       = document.getElementById('loadingSub');
+
+// ── Theme management ────────────────────────────────────────────────────────
+
+function getPreferredTheme() {
+  const stored = localStorage.getItem('theme');
+  if (stored) return stored;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('theme', theme);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  setTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// Initialize theme
+setTheme(getPreferredTheme());
+btnTheme.addEventListener('click', toggleTheme);
+
+// Listen for system theme changes
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+  if (!localStorage.getItem('theme')) {
+    setTheme(e.matches ? 'dark' : 'light');
+  }
+});
 
 // ── Model registry ──────────────────────────────────────────────────────────
 
