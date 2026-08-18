@@ -1,0 +1,16 @@
+[
+  {
+    "id": "phi4-mini",
+    "name": "Phi-4 Mini Instruct",
+    "path": "/home/dadi/projects/models/phi4-mini/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
+    "port": 8081,
+    "ctx_size": 4096
+  },
+  {
+    "id": "mistral-7b",
+    "name": "Mistral 7B v0.3",
+    "path": "/home/dadi/projects/models/mistral-7b/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+    "port": 8082,
+    "ctx_size": 8192
+  }
+]

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Local LLM Chat</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-tertiary: #0f3460;
+  --text: #e0e0e0;
+  --text-muted: #888;
+  --accent: #00d4ff;
+  --accent-hover: #00b8d9;
+  --user-bg: #1e3a5f;
+  --bot-bg: #2a2a4a;
+  --error: #ff4757;
+  --success: #2ed573;
+  --warning: #ffa502;
+  --border: #2a2a4a;
+  --radius: 12px;
+}
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.header h1 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.model-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 300px;
+}
+.model-selector label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.model-selector select {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.model-selector select:focus { border-color: var(--accent); }
+.btn-load {
+  padding: 10px 20px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+.btn-load:hover { background: var(--accent-hover); }
+.btn-load:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Status bar */
+.status-bar {
+  padding: 8px 24px;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.status-dot.loading { background: var(--warning); animation: pulse 1s infinite; }
+.status-dot.ready { background: var(--success); }
+.status-dot.error { background: var(--error); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Chat area */
+.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.message {
+  max-width: 85%;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  line-height: 1.6;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.message.user {
+  align-self: flex-end;
+  background: var(--user-bg);
+  border-bottom-right-radius: 4px;
+}
+.message.bot {
+  align-self: flex-start;
+  background: var(--bot-bg);
+  border-bottom-left-radius: 4px;
+}
+.message.error {
+  background: rgba(255, 71, 87, 0.15);
+  border: 1px solid var(--error);
+  color: var(--error);
+  align-self: center;
+  max-width: 90%;
+}
+.message .thinking {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.message code {
+  background: rgba(0,0,0,0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+}
+.message pre {
+  background: rgba(0,0,0,0.4);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.message pre code {
+  background: none;
+  padding: 0;
+}
+
+/* Input area */
+.input-area {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+.input-area textarea {
+  flex: 1;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+  min-height: 48px;
+  max-height: 200px;
+  transition: border-color 0.2s;
+}
+.input-area textarea:focus { border-color: var(--accent); }
+.input-area textarea::placeholder { color: var(--text-muted); }
+.btn-send {
+  padding: 12px 24px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+  height: 48px;
+}
+.btn-send:hover { background: var(--accent-hover); }
+.btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Loading overlay */
+.loading-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+.loading-overlay.visible { opacity: 1; pointer-events: all; }
+.loading-content {
+  text-align: center;
+  color: var(--text);
+}
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-content p { font-size: 1.1rem; }
+.loading-content .sub { font-size: 0.85rem; color: var(--text-muted); margin-top: 8px; }
+
+/* Empty state */
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 1rem;
+  text-align: center;
+}
+.empty-state.hidden { display: none; }
+.empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+
+/* Scrollbar */
+.messages::-webkit-scrollbar { width: 8px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.messages::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Responsive */
+@media (max-width: 600px) {
+  .header { padding: 12px 16px; }
+  .messages { padding: 16px; }
+  .input-area { padding: 12px 16px; }
+  .message { max-width: 95%; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🤖 Local LLM Chat</h1>
+  <div class="model-selector">
+    <label for="modelSelect">Model:</label>
+    <select id="modelSelect">
+      <option value="">-- Select a model --</option>
+    </select>
+    <button class="btn-load" id="btnLoad" disabled>Load Model</button>
+  </div>
+</div>
+
+<div class="status-bar">
+  <div class="status-dot" id="statusDot"></div>
+  <span id="statusText">No model loaded</span>
+</div>
+
+<div class="chat-container">
+  <div class="messages" id="messages">
+    <div class="empty-state" id="emptyState">
+      <div>
+        <div class="icon">💬</div>
+        <p>Select and load a model to start chatting</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="input-area">
+  <textarea id="inputText" placeholder="Type your message..." rows="1"></textarea>
+  <button class="btn-send" id="btnSend" disabled>Send</button>
+</div>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-content">
+    <div class="spinner"></div>
+    <p id="loadingText">Loading model...</p>
+    <p class="sub" id="loadingSub">This may take 10-30 seconds</p>
+  </div>
+</div>
+
+<script>
+const API_BASE = '';
+let models = [];
+let currentModelId = null;
+let isReady = false;
+let isStreaming = false;
+let messages = [];
+
+// DOM elements
+const modelSelect = document.getElementById('modelSelect');
+const btnLoad = document.getElementById('btnLoad');
+const btnSend = document.getElementById('btnSend');
+const inputText = document.getElementById('inputText');
+const messagesDiv = document.getElementById('messages');
+const emptyState = document.getElementById('emptyState');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingText = document.getElementById('loadingText');
+const loadingSub = document.getElementById('loadingSub');
+
+// Fetch models on load
+async function fetchModels() {
+  try {
+    const res = await fetch(`${API_BASE}/api/models`);
+    models = await res.json();
+    renderModelSelect();
+  } catch (e) {
+    console.error('Failed to fetch models:', e);
+  }
+}
+
+function renderModelSelect() {
+  modelSelect.innerHTML = '<option value="">-- Select a model --</option>';
+  models.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.config.id;
+    opt.textContent = `${m.config.name} (${m.state})`;
+    if (m.config.id === currentModelId && m.state === 'ready') {
+      opt.selected = true;
+    }
+    modelSelect.appendChild(opt);
+  });
+}
+
+// Load model
+btnLoad.addEventListener('click', async () => {
+  const modelId = modelSelect.value;
+  if (!modelId) return;
+
+  btnLoad.disabled = true;
+  showLoading(`Loading ${getModelName(modelId)}...`);
+  setStatus('loading', 'Loading model...');
+
+  try {
+    const res = await fetch(`${API_BASE}/api/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_id: modelId })
+    });
+
+    if (!res.ok) {
+      let errMsg = 'Failed to load model';
+      try {
+        const err = await res.json();
+        errMsg = err.error || errMsg;
+      } catch (_) {}
+      throw new Error(errMsg);
+    }
+
+    currentModelId = modelId;
+    // Poll for ready state
+    await pollModelReady(modelId);
+  } catch (e) {
+    hideLoading();
+    setStatus('error', `Error: ${e.message}`);
+    addMessage('error', `Failed to load model: ${e.message}`);
+    btnLoad.disabled = false;
+  }
+});
+
+async function pollModelReady(modelId) {
+  const maxAttempts = 180; // 3 minutes
+  for (let i = 0; i < maxAttempts; i++) {
+    await sleep(1000);
+    try {
+      const res = await fetch(`${API_BASE}/api/status`);
+      const status = await res.json();
+      const ms = status.models[modelId];
+
+      if (ms && ms.state === 'ready') {
+        isReady = true;
+        hideLoading();
+        setStatus('ready', `${getModelName(modelId)} is ready`);
+        enableChat(true);
+        btnLoad.disabled = false;
+        return;
+      }
+      if (ms && ms.state === 'error') {
+        throw new Error(ms.error || 'Model failed to load');
+      }
+      // Update loading text
+      const elapsed = i + 1;
+      loadingSub.textContent = `Loading... ${elapsed}s elapsed`;
+    } catch (e) {
+      if (e.message.includes('Model failed')) throw e;
+    }
+  }
+  throw new Error('Timeout: Model took too long to load');
+}
+
+function getModelName(id) {
+  const m = models.find(m => m.config.id === id);
+  return m ? m.config.name : id;
+}
+
+// Chat
+btnSend.addEventListener('click', sendMessage);
+inputText.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+inputText.addEventListener('input', () => {
+  inputText.style.height = 'auto';
+  inputText.style.height = Math.min(inputText.scrollHeight, 200) + 'px';
+});
+
+async function sendMessage() {
+  const text = inputText.value.trim();
+  if (!text || isStreaming) return;
+  if (!isReady) {
+    addMessage('error', 'Please load a model first');
+    return;
+  }
+
+  // Add user message
+  addMessage('user', text);
+  messages.push({ role: 'user', content: text });
+  inputText.value = '';
+  inputText.style.height = 'auto';
+
+  // Add bot message placeholder
+  const botMsgEl = addMessage('bot', '');
+  botMsgEl.querySelector('.thinking') || addThinking(botMsgEl);
+
+  isStreaming = true;
+  btnSend.disabled = true;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model_id: currentModelId,
+        messages: messages
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Chat request failed');
+    }
+
+    // Stream the response
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullResponse = '';
+    let buffer = '';
+
+    // Remove thinking indicator
+    const thinkingEl = botMsgEl.querySelector('.thinking');
+    if (thinkingEl) thinkingEl.remove();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // Keep incomplete line
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              fullResponse += content;
+              renderBotMessage(botMsgEl, fullResponse);
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    if (fullResponse) {
+      messages.push({ role: 'assistant', content: fullResponse });
+    }
+  } catch (e) {
+    const thinkingEl = botMsgEl.querySelector('.thinking');
+    if (thinkingEl) thinkingEl.remove();
+    botMsgEl.className = 'message error';
+    botMsgEl.textContent = `Error: ${e.message}`;
+  } finally {
+    isStreaming = false;
+    btnSend.disabled = false;
+  }
+}
+
+function addMessage(type, content) {
+  emptyState.classList.add('hidden');
+  const el = document.createElement('div');
+  el.className = `message ${type}`;
+  if (type === 'bot') {
+    el.innerHTML = content ? formatContent(content) : '';
+  } else {
+    el.textContent = content;
+  }
+  messagesDiv.appendChild(el);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  return el;
+}
+
+function addThinking(el) {
+  const span = document.createElement('span');
+  span.className = 'thinking';
+  span.textContent = 'Thinking...';
+  el.appendChild(span);
+}
+
+function renderBotMessage(el, content) {
+  el.innerHTML = formatContent(content);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+function formatContent(text) {
+  // Basic markdown: code blocks, inline code
+  let html = escapeHtml(text);
+  // Code blocks: ```...```
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // Inline code: `...`
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold: **...**
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  return html;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Status
+function setStatus(state, text) {
+  statusDot.className = `status-dot ${state}`;
+  statusText.textContent = text;
+}
+
+function enableChat(enabled) {
+  btnSend.disabled = !enabled;
+  inputText.disabled = !enabled;
+  if (enabled) inputText.focus();
+}
+
+// Loading overlay
+function showLoading(text) {
+  loadingText.textContent = text;
+  loadingSub.textContent = 'This may take 10-30 seconds';
+  loadingOverlay.classList.add('visible');
+}
+
+function hideLoading() {
+  loadingOverlay.classList.remove('visible');
+}
+
+// Poll status periodically
+async function pollStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    const status = await res.json();
+    if (status.active_model) {
+      const ms = status.models[status.active_model];
+      if (ms) {
+        if (ms.state === 'ready') {
+          isReady = true;
+          currentModelId = status.active_model;
+          setStatus('ready', `${getModelName(status.active_model)} is ready`);
+          enableChat(true);
+        } else if (ms.state === 'loading') {
+          setStatus('loading', 'Loading model...');
+        } else if (ms.state === 'error') {
+          setStatus('error', `Error: ${ms.error}`);
+        }
+      }
+    }
+    renderModelSelect();
+  } catch (e) {}
+}
+
+// Helpers
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Init
+fetchModels();
+setInterval(pollStatus, 5000);
+enableChat(false);
+</script>
+</body>
+</html>
