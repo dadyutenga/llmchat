@@ -4,13 +4,35 @@
     "name": "Phi-4 Mini Instruct",
     "path": "/home/dadi/projects/models/phi4-mini/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
     "port": 8081,
-    "ctx_size": 4096
+    "ctx_size": 4096,
+    "ngl": 0,
+    "system_prompt": "You are a helpful, precise, and friendly AI assistant. Give clear, direct answers. When appropriate, provide brief explanations to help the user understand.",
+    "sampling": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repeat_penalty": 1.1,
+      "min_p": 0.05,
+      "max_tokens": 2048
+    },
+    "extra_args": []
   },
   {
     "id": "mistral-7b",
-    "name": "Mistral 7B v0.3",
+    "name": "Mistral 7B Instruct v0.3",
     "path": "/home/dadi/projects/models/mistral-7b/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
     "port": 8082,
-    "ctx_size": 8192
+    "ctx_size": 8192,
+    "ngl": 0,
+    "system_prompt": "You are Mistral, a knowledgeable and helpful AI assistant. Provide accurate, well-structured responses. Be concise but thorough when the question warrants it.",
+    "sampling": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repeat_penalty": 1.1,
+      "min_p": 0.05,
+      "max_tokens": 4096
+    },
+    "extra_args": []
   }
 ]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,71 +19,81 @@ import (
 	"time"
 )
 
-// ModelConfig represents a model entry in models.json
-type ModelConfig struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Port    int    `json:"port"`
-	CtxSize int    `json:"ctx_size"`
+// SamplingConfig holds per-model sampling parameters sent to llama-server.
+type SamplingConfig struct {
+	Temperature   *float64 `json:"temperature,omitempty"`
+	TopP          *float64 `json:"top_p,omitempty"`
+	TopK          *int     `json:"top_k,omitempty"`
+	RepeatPenalty *float64 `json:"repeat_penalty,omitempty"`
+	MinP          *float64 `json:"min_p,omitempty"`
+	MaxTokens     *int     `json:"max_tokens,omitempty"`
 }
 
-// ModelStatus tracks the runtime state of a model
+// ModelConfig is one entry from models.json — the full model registry.
+type ModelConfig struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Path         string          `json:"path"`
+	Port         int             `json:"port"`
+	CtxSize      int             `json:"ctx_size"`
+	NGL          int             `json:"ngl"`
+	SystemPrompt string          `json:"system_prompt,omitempty"`
+	Sampling     *SamplingConfig `json:"sampling,omitempty"`
+	ExtraArgs    []string        `json:"extra_args,omitempty"`
+}
+
+// ModelStatus is the runtime state exposed via /api/status.
 type ModelStatus struct {
 	Config  ModelConfig `json:"config"`
-	State   string      `json:"state"` // unloaded, loading, ready, error
+	State   string      `json:"state"` // unloaded | loading | ready | error
 	Error   string      `json:"error,omitempty"`
 	Started time.Time   `json:"started,omitempty"`
 }
 
-// ChatMessage represents a message in the conversation
+// ChatMessage is a single turn in the conversation.
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-// ChatRequest is the incoming chat API request
+// ChatRequest is what the frontend POSTs to /api/chat.
 type ChatRequest struct {
 	ModelID  string        `json:"model_id"`
 	Messages []ChatMessage `json:"messages"`
 }
 
-// Server manages model processes and serves the API
+// Server holds all state: model registry, the running llama-server process,
+// and the load-generation counter that prevents stale goroutines from
+// corrupting state after a model switch.
 type Server struct {
-	models       map[string]*ModelStatus
-	mu           sync.RWMutex
-	cmd          *exec.Cmd
-	activeModel  string
-	shutdownCh   chan struct{}
+	models      map[string]*ModelStatus
+	mu          sync.RWMutex
+	cmd         *exec.Cmd
+	cancelFn    context.CancelFunc // cancels the running llama-server context
+	loadCancel  context.CancelFunc // cancels an in-progress load goroutine
+	activeModel string
+	loadGen     uint64       // incremented on every load; stale loads self-abort
+	stderrBuf   *bytes.Buffer // captures llama-server stderr for error surfacing
 }
 
-var (
-	llamaServerBin string
-)
+var llamaServerBin string
 
 func main() {
-	// Find llama-server binary
 	llamaServerBin = findLlamaServer()
 
-	// Load model config
 	models, err := loadModels("models.json")
 	if err != nil {
 		log.Fatalf("Failed to load models.json: %v", err)
 	}
 
 	srv := &Server{
-		models:     make(map[string]*ModelStatus),
-		shutdownCh: make(chan struct{}),
+		models: make(map[string]*ModelStatus),
 	}
-
 	for _, m := range models {
-		srv.models[m.ID] = &ModelStatus{
-			Config: m,
-			State:  "unloaded",
-		}
+		srv.models[m.ID] = &ModelStatus{Config: m, State: "unloaded"}
 	}
 
-	// Setup signal handler for graceful shutdown
+	// Graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -92,11 +103,11 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Setup routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/models", srv.handleModels)
 	mux.HandleFunc("/api/status", srv.handleStatus)
 	mux.HandleFunc("/api/load", srv.handleLoad)
+	mux.HandleFunc("/api/unload", srv.handleUnload)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.Handle("/", http.FileServer(http.Dir("static")))
 
@@ -110,8 +121,8 @@ func main() {
 	}
 }
 
+// findLlamaServer checks common install paths.
 func findLlamaServer() string {
-	// Check common locations
 	candidates := []string{
 		"llama-server",
 		"/usr/local/bin/llama-server",
@@ -120,17 +131,15 @@ func findLlamaServer() string {
 		"./llama-server",
 	}
 	for _, c := range candidates {
-		if _, err := exec.LookPath(c); err == nil {
-			return c
-		}
-		if _, err := os.Stat(c); err == nil {
-			return c
+		if p, err := exec.LookPath(c); err == nil {
+			return p
 		}
 	}
-	log.Println("WARNING: llama-server not found in common locations. Set PATH or place it in the current directory.")
+	log.Println("WARNING: llama-server not found in common locations")
 	return "llama-server"
 }
 
+// loadModels reads and validates models.json.
 func loadModels(path string) ([]ModelConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -140,7 +149,6 @@ func loadModels(path string) ([]ModelConfig, error) {
 	if err := json.Unmarshal(data, &models); err != nil {
 		return nil, err
 	}
-	// Validate paths
 	for _, m := range models {
 		if _, err := os.Stat(m.Path); err != nil {
 			log.Printf("WARNING: Model file not found: %s (%s)", m.ID, m.Path)
@@ -148,6 +156,8 @@ func loadModels(path string) ([]ModelConfig, error) {
 	}
 	return models, nil
 }
+
+// ── HTTP handlers ────────────────────────────────────────────────────────────
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -157,7 +167,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []ModelStatus
+	result := make([]ModelStatus, 0, len(s.models))
 	for _, ms := range s.models {
 		result = append(result, *ms)
 	}
@@ -171,12 +181,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	status := map[string]interface{}{
+	writeJSON(w, map[string]interface{}{
 		"active_model": s.activeModel,
 		"models":       s.models,
-	}
-	writeJSON(w, status)
+	})
 }
 
 func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
@@ -193,116 +201,181 @@ func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	ms, exists := s.models[req.ModelID]
+	s.mu.RUnlock()
 	if !exists {
-		s.mu.Unlock()
 		http.Error(w, "Model not found", http.StatusNotFound)
 		return
 	}
-	s.mu.Unlock()
 
-	// If already loading this model, just return
+	// Already loading or already active → no-op.
 	if ms.State == "loading" || (ms.State == "ready" && s.activeModel == req.ModelID) {
 		writeJSON(w, ms)
 		return
 	}
 
-	// Kill any existing model
+	// Kill whatever is currently running.
 	s.cleanup()
 
-	// Start loading new model
+	// Start the new load (generation counter prevents stale updates).
 	go s.loadModel(ms)
 	writeJSON(w, map[string]string{"status": "loading", "model": req.ModelID})
 }
 
+func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.cleanup()
+	writeJSON(w, map[string]string{"status": "unloaded"})
+}
+
+// ── Model loading ────────────────────────────────────────────────────────────
+
 func (s *Server) loadModel(ms *ModelStatus) {
+	// Bump generation so any still-running previous load self-aborts.
 	s.mu.Lock()
+	s.loadGen++
+	myGen := s.loadGen
 	ms.State = "loading"
 	ms.Error = ""
 	ms.Started = time.Now()
 	s.activeModel = ms.Config.ID
+
+	// Create a cancellable context. This context is cancelled ONLY by
+	// cleanup() when the user switches models — NOT when loadModel returns.
+	ctx, cancel := context.WithCancel(context.Background())
+	s.loadCancel = cancel
 	s.mu.Unlock()
 
 	log.Printf("Loading model %s from %s on port %d", ms.Config.ID, ms.Config.Path, ms.Config.Port)
 
-	// Verify model file exists
+	// Pre-flight: verify the GGUF file exists.
 	if _, err := os.Stat(ms.Config.Path); err != nil {
-		s.mu.Lock()
-		ms.State = "error"
-		ms.Error = fmt.Sprintf("Model file not found: %s", ms.Config.Path)
-		s.mu.Unlock()
-		log.Printf("Error: %s", ms.Error)
+		s.setStateIfCurrentGen(ms, myGen, "error",
+			fmt.Sprintf("Model file not found: %s", ms.Config.Path))
 		return
 	}
 
-	// Build command
+	// Build llama-server command line from the full registry entry.
 	args := []string{
 		"-m", ms.Config.Path,
 		"--port", fmt.Sprintf("%d", ms.Config.Port),
 		"-c", fmt.Sprintf("%d", ms.Config.CtxSize),
 		"--host", "127.0.0.1",
 	}
-	
-	ctx, cancel := context.WithCancel(context.Background())
+	if ms.Config.NGL > 0 {
+		args = append(args, "-ngl", fmt.Sprintf("%d", ms.Config.NGL))
+	}
+	if len(ms.Config.ExtraArgs) > 0 {
+		args = append(args, ms.Config.ExtraArgs...)
+	}
+
 	cmd := exec.CommandContext(ctx, llamaServerBin, args...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	// Capture stderr so we can surface real errors to the UI.
+	stderrBuf := &bytes.Buffer{}
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
 
 	s.mu.Lock()
 	s.cmd = cmd
-	// Store cancel func for cleanup
-	s.shutdownCh = make(chan struct{})
-	go func() {
-		<-s.shutdownCh
-		cancel()
-	}()
+	s.cancelFn = cancel
+	s.stderrBuf = stderrBuf
 	s.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
-		s.mu.Lock()
-		ms.State = "error"
-		ms.Error = fmt.Sprintf("Failed to start llama-server: %v", err)
-		s.mu.Unlock()
-		log.Printf("Error starting llama-server: %v", err)
+		s.setStateIfCurrentGen(ms, myGen, "error",
+			fmt.Sprintf("Failed to start llama-server: %v", err))
 		return
 	}
 
-	// Health check loop
+	// Poll /health until ready, timed out, cancelled, or process died.
 	healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", ms.Config.Port)
-	ready := false
 	timeout := time.After(3 * time.Minute)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	for !ready {
+	for {
 		select {
-		case <-timeout:
-			s.mu.Lock()
-			ms.State = "error"
-			ms.Error = "Model loading timed out (3 minutes)"
-			s.mu.Unlock()
-			s.cleanup()
-			log.Printf("Model %s loading timed out", ms.Config.ID)
+		case <-ctx.Done():
+			// Cancelled by cleanup() or a newer load — exit silently.
 			return
+
+		case <-timeout:
+			errDetail := tailLines(stderrBuf.String(), 5)
+			s.setStateIfCurrentGen(ms, myGen, "error",
+				fmt.Sprintf("Model loading timed out (3 min). Last stderr: %s", errDetail))
+			s.cleanup()
+			return
+
 		case <-ticker.C:
+			// Check if the process exited early (e.g. bad model file).
+			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+				errDetail := tailLines(stderrBuf.String(), 10)
+				s.setStateIfCurrentGen(ms, myGen, "error",
+					fmt.Sprintf("llama-server exited prematurely: %s", errDetail))
+				s.cleanup()
+				return
+			}
+
 			resp, err := http.Get(healthURL)
 			if err == nil {
 				body, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				status := string(body)
-				if strings.Contains(status, "ok") || resp.StatusCode == 200 {
-					ready = true
+				if strings.Contains(string(body), "ok") || resp.StatusCode == 200 {
+					s.mu.Lock()
+					if s.loadGen == myGen {
+						ms.State = "ready"
+					}
+					s.mu.Unlock()
+					log.Printf("Model %s is ready! (took %v)",
+						ms.Config.ID, time.Since(ms.Started))
+					return
 				}
 			}
 		}
 	}
-
-	s.mu.Lock()
-	ms.State = "ready"
-	log.Printf("Model %s is ready! (took %v)", ms.Config.ID, time.Since(ms.Started))
-	s.mu.Unlock()
 }
+
+// setStateIfCurrentGen only writes to the model status if this goroutine
+// still owns the current load generation, preventing stale updates.
+func (s *Server) setStateIfCurrentGen(ms *ModelStatus, gen uint64, state, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadGen != gen {
+		return // a newer load took over; don't touch state
+	}
+	ms.State = state
+	ms.Error = errMsg
+	if errMsg != "" {
+		log.Printf("Model %s error: %s", ms.Config.ID, errMsg)
+	}
+}
+
+// tailLines returns the last n non-empty lines from s, joined with " | ".
+func tailLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	var out []string
+	for i := len(lines) - 1; i >= 0 && len(out) < n; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	// Reverse back to chronological order.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	if len(out) == 0 {
+		return "(no stderr output captured)"
+	}
+	return strings.Join(out, " | ")
+}
+
+// ── Chat proxy ───────────────────────────────────────────────────────────────
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -325,35 +398,72 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Model not found"}`, http.StatusNotFound)
 		return
 	}
-
 	if ms.State != "ready" || activeModel != req.ModelID {
-		http.Error(w, fmt.Sprintf(`{"error":"Model not loaded. Current state: %s"}`, ms.State), http.StatusServiceUnavailable)
+		http.Error(w,
+			fmt.Sprintf(`{"error":"Model not loaded. Current state: %s"}`, ms.State),
+			http.StatusServiceUnavailable)
 		return
 	}
 
-	// Forward to llama-server's OpenAI-compatible endpoint
-	chatURL := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", ms.Config.Port)
+	// ── Inject system prompt if the model has one and the client didn't
+	//    send one already.
+	messages := make([]ChatMessage, 0, len(req.Messages)+1)
+	hasSystem := false
+	for _, m := range req.Messages {
+		if m.Role == "system" {
+			hasSystem = true
+		}
+		messages = append(messages, m)
+	}
+	if !hasSystem && ms.Config.SystemPrompt != "" {
+		messages = append([]ChatMessage{
+			{Role: "system", Content: ms.Config.SystemPrompt},
+		}, messages...)
+	}
 
+	// ── Build the payload with per-model sampling parameters.
 	payload := map[string]interface{}{
 		"model":    ms.Config.ID,
-		"messages": req.Messages,
+		"messages": messages,
 		"stream":   true,
 	}
-	payloadBytes, _ := json.Marshal(payload)
+	if samp := ms.Config.Sampling; samp != nil {
+		if v := samp.Temperature; v != nil {
+			payload["temperature"] = *v
+		}
+		if v := samp.TopP; v != nil {
+			payload["top_p"] = *v
+		}
+		if v := samp.TopK; v != nil {
+			payload["top_k"] = *v
+		}
+		if v := samp.RepeatPenalty; v != nil {
+			payload["repeat_penalty"] = *v
+		}
+		if v := samp.MinP; v != nil {
+			payload["min_p"] = *v
+		}
+		if v := samp.MaxTokens; v != nil {
+			payload["max_tokens"] = *v
+		}
+	}
 
-	// Create the proxied request
-	proxyReq, err := http.NewRequest("POST", chatURL, strings.NewReader(string(payloadBytes)))
+	payloadBytes, _ := json.Marshal(payload)
+	chatURL := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", ms.Config.Port)
+
+	proxyReq, err := http.NewRequest("POST", chatURL, bytes.NewReader(payloadBytes))
 	if err != nil {
-		http.Error(w, `{"error":"Failed to create request"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error":"Failed to create proxy request"}`, http.StatusInternalServerError)
 		return
 	}
 	proxyReq.Header.Set("Content-Type", "application/json")
 
-	// Stream the response
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(proxyReq)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Failed to connect to model server: %v"}`, err), http.StatusBadGateway)
+		http.Error(w,
+			fmt.Sprintf(`{"error":"Failed to connect to model server: %v"}`, err),
+			http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -364,7 +474,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set SSE headers
+	// Stream SSE tokens from llama-server straight through to the browser.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -375,14 +485,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stream tokens from llama-server to client
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		// SSE format: "data: {...}\n\n"
 		if strings.HasPrefix(line, "data: ") {
 			fmt.Fprintf(w, "%s\n\n", line)
 			flusher.Flush()
@@ -390,41 +498,53 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ── Process cleanup ──────────────────────────────────────────────────────────
+
 func (s *Server) cleanup() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	if s.cmd != nil && s.cmd.Process != nil {
-		log.Printf("Killing previous llama-server (PID: %d)", s.cmd.Process.Pid)
-		s.cmd.Process.Signal(syscall.SIGTERM)
-		// Give it a moment to clean up
-		done := make(chan error, 1)
-		go func() {
-			done <- s.cmd.Wait()
-		}()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			s.cmd.Process.Kill()
-		}
-		s.cmd = nil
-	}
+	cmd := s.cmd
+	cancelFn := s.cancelFn
+	loadCancel := s.loadCancel
 
-	// Update all models to unloaded
+	s.cmd = nil
+	s.cancelFn = nil
+	s.loadCancel = nil
+	s.stderrBuf = nil
+	s.activeModel = ""
 	for _, ms := range s.models {
 		if ms.State != "unloaded" {
 			ms.State = "unloaded"
 			ms.Error = ""
 		}
 	}
-	s.activeModel = ""
-	
-	// Signal shutdown channel
-	select {
-	case s.shutdownCh <- struct{}{}:
-	default:
+
+	s.mu.Unlock()
+
+	// Cancel any in-progress load goroutine first.
+	if loadCancel != nil {
+		loadCancel()
+	}
+	// Cancel the llama-server context (kills the subprocess tree).
+	if cancelFn != nil {
+		cancelFn()
+	}
+
+	// SIGTERM with a 5 s grace period before SIGKILL.
+	if cmd != nil && cmd.Process != nil {
+		log.Printf("Killing previous llama-server (PID: %d)", cmd.Process.Pid)
+		cmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+		}
 	}
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")

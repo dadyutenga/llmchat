@@ -94,17 +94,24 @@ body {
   gap: 8px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--text-muted);
+  flex-shrink: 0;
 }
 .status-dot.loading { background: var(--warning); animation: pulse 1s infinite; }
 .status-dot.ready { background: var(--success); }
 .status-dot.error { background: var(--error); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.status-detail {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-left: auto;
+}
 
 /* Chat area */
 .chat-container {
@@ -146,6 +153,15 @@ body {
   color: var(--error);
   align-self: center;
   max-width: 90%;
+}
+.message.system {
+  align-self: center;
+  background: rgba(46, 213, 115, 0.1);
+  border: 1px solid rgba(46, 213, 115, 0.3);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  max-width: 90%;
+  text-align: center;
 }
 .message .thinking {
   color: var(--text-muted);
@@ -228,6 +244,8 @@ body {
 .loading-content {
   text-align: center;
   color: var(--text);
+  max-width: 500px;
+  padding: 0 20px;
 }
 .spinner {
   width: 48px;
@@ -286,6 +304,7 @@ body {
 <div class="status-bar">
   <div class="status-dot" id="statusDot"></div>
   <span id="statusText">No model loaded</span>
+  <span class="status-detail" id="statusDetail"></span>
 </div>
 
 <div class="chat-container">
@@ -318,49 +337,65 @@ let models = [];
 let currentModelId = null;
 let isReady = false;
 let isStreaming = false;
-let messages = [];
+let messages = [];  // conversation history for the active model
 
 // DOM elements
-const modelSelect = document.getElementById('modelSelect');
-const btnLoad = document.getElementById('btnLoad');
-const btnSend = document.getElementById('btnSend');
-const inputText = document.getElementById('inputText');
-const messagesDiv = document.getElementById('messages');
-const emptyState = document.getElementById('emptyState');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
+const modelSelect  = document.getElementById('modelSelect');
+const btnLoad      = document.getElementById('btnLoad');
+const btnSend      = document.getElementById('btnSend');
+const inputText    = document.getElementById('inputText');
+const messagesDiv  = document.getElementById('messages');
+const emptyState   = document.getElementById('emptyState');
+const statusDot    = document.getElementById('statusDot');
+const statusText   = document.getElementById('statusText');
+const statusDetail = document.getElementById('statusDetail');
 const loadingOverlay = document.getElementById('loadingOverlay');
-const loadingText = document.getElementById('loadingText');
-const loadingSub = document.getElementById('loadingSub');
+const loadingText    = document.getElementById('loadingText');
+const loadingSub     = document.getElementById('loadingSub');
 
-// Fetch models on load
+// ── Model registry ──────────────────────────────────────────────────────────
+
 async function fetchModels() {
   try {
     const res = await fetch(`${API_BASE}/api/models`);
     models = await res.json();
     renderModelSelect();
+    btnLoad.disabled = !modelSelect.value;
   } catch (e) {
     console.error('Failed to fetch models:', e);
   }
 }
 
 function renderModelSelect() {
+  const prev = modelSelect.value;
   modelSelect.innerHTML = '<option value="">-- Select a model --</option>';
   models.forEach(m => {
     const opt = document.createElement('option');
     opt.value = m.config.id;
-    opt.textContent = `${m.config.name} (${m.state})`;
-    if (m.config.id === currentModelId && m.state === 'ready') {
-      opt.selected = true;
-    }
+    const stateLabel = m.state === 'ready' ? '✓ ready'
+                     : m.state === 'loading' ? '… loading'
+                     : m.state === 'error' ? '✗ error'
+                     : 'unloaded';
+    opt.textContent = `${m.config.name} (${stateLabel})`;
     modelSelect.appendChild(opt);
   });
+  // Restore selection if it still exists.
+  if (prev && models.some(m => m.config.id === prev)) {
+    modelSelect.value = prev;
+  }
 }
 
-// Load model
+modelSelect.addEventListener('change', () => {
+  btnLoad.disabled = !modelSelect.value;
+});
+
+// ── Load model ──────────────────────────────────────────────────────────────
+
 btnLoad.addEventListener('click', async () => {
   const modelId = modelSelect.value;
   if (!modelId) return;
+
+  const isSwitch = currentModelId && currentModelId !== modelId && isReady;
 
   btnLoad.disabled = true;
   showLoading(`Loading ${getModelName(modelId)}...`);
@@ -375,15 +410,17 @@ btnLoad.addEventListener('click', async () => {
 
     if (!res.ok) {
       let errMsg = 'Failed to load model';
-      try {
-        const err = await res.json();
-        errMsg = err.error || errMsg;
-      } catch (_) {}
+      try { const e = await res.json(); errMsg = e.error || errMsg; } catch (_) {}
       throw new Error(errMsg);
     }
 
     currentModelId = modelId;
-    // Poll for ready state
+
+    // Clear conversation when switching to a different model.
+    if (isSwitch) {
+      clearConversation(`Switched to ${getModelName(modelId)}`);
+    }
+
     await pollModelReady(modelId);
   } catch (e) {
     hideLoading();
@@ -406,6 +443,7 @@ async function pollModelReady(modelId) {
         isReady = true;
         hideLoading();
         setStatus('ready', `${getModelName(modelId)} is ready`);
+        updateStatusDetail(ms);
         enableChat(true);
         btnLoad.disabled = false;
         return;
@@ -413,11 +451,11 @@ async function pollModelReady(modelId) {
       if (ms && ms.state === 'error') {
         throw new Error(ms.error || 'Model failed to load');
       }
-      // Update loading text
       const elapsed = i + 1;
       loadingSub.textContent = `Loading... ${elapsed}s elapsed`;
     } catch (e) {
-      if (e.message.includes('Model failed')) throw e;
+      if (e.message.includes('Model failed') || e.message.includes('failed')) throw e;
+      // Network error — server may be restarting, keep polling.
     }
   }
   throw new Error('Timeout: Model took too long to load');
@@ -428,7 +466,24 @@ function getModelName(id) {
   return m ? m.config.name : id;
 }
 
-// Chat
+function getModelConfig(id) {
+  const m = models.find(m => m.config.id === id);
+  return m ? m.config : null;
+}
+
+// ── Conversation management ─────────────────────────────────────────────────
+
+function clearConversation(reason) {
+  messages = [];
+  messagesDiv.innerHTML = '';
+  emptyState.classList.remove('hidden');
+  if (reason) {
+    addMessage('system', `🔄 ${reason} — conversation cleared`);
+  }
+}
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+
 btnSend.addEventListener('click', sendMessage);
 inputText.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -450,15 +505,15 @@ async function sendMessage() {
     return;
   }
 
-  // Add user message
+  // Add user message to UI and history.
   addMessage('user', text);
   messages.push({ role: 'user', content: text });
   inputText.value = '';
   inputText.style.height = 'auto';
 
-  // Add bot message placeholder
+  // Add bot message placeholder with thinking indicator.
   const botMsgEl = addMessage('bot', '');
-  botMsgEl.querySelector('.thinking') || addThinking(botMsgEl);
+  addThinking(botMsgEl);
 
   isStreaming = true;
   btnSend.disabled = true;
@@ -474,19 +529,19 @@ async function sendMessage() {
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Chat request failed');
+      let errMsg = 'Chat request failed';
+      try { const e = await res.json(); errMsg = e.error || errMsg; } catch (_) {}
+      throw new Error(errMsg);
     }
 
-    // Stream the response
+    // Stream SSE response.
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let fullResponse = '';
     let buffer = '';
 
-    // Remove thinking indicator
-    const thinkingEl = botMsgEl.querySelector('.thinking');
-    if (thinkingEl) thinkingEl.remove();
+    // Remove thinking indicator once tokens start arriving.
+    let thinkingRemoved = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -494,7 +549,7 @@ async function sendMessage() {
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop(); // Keep incomplete line
+      buffer = lines.pop(); // Keep incomplete line.
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
@@ -504,20 +559,35 @@ async function sendMessage() {
             const parsed = JSON.parse(data);
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
+              if (!thinkingRemoved) {
+                const el = botMsgEl.querySelector('.thinking');
+                if (el) el.remove();
+                thinkingRemoved = true;
+              }
               fullResponse += content;
               renderBotMessage(botMsgEl, fullResponse);
             }
-          } catch (e) {}
+          } catch (e) { /* skip malformed chunks */ }
         }
       }
     }
 
+    // If no content arrived at all, remove thinking.
+    if (!thinkingRemoved) {
+      const el = botMsgEl.querySelector('.thinking');
+      if (el) el.remove();
+    }
+
     if (fullResponse) {
       messages.push({ role: 'assistant', content: fullResponse });
+    } else if (!thinkingRemoved) {
+      // Empty response — show a warning.
+      botMsgEl.className = 'message error';
+      botMsgEl.textContent = 'Model returned an empty response.';
     }
   } catch (e) {
-    const thinkingEl = botMsgEl.querySelector('.thinking');
-    if (thinkingEl) thinkingEl.remove();
+    const el = botMsgEl.querySelector('.thinking');
+    if (el) el.remove();
     botMsgEl.className = 'message error';
     botMsgEl.textContent = `Error: ${e.message}`;
   } finally {
@@ -525,6 +595,8 @@ async function sendMessage() {
     btnSend.disabled = false;
   }
 }
+
+// ── Message rendering ───────────────────────────────────────────────────────
 
 function addMessage(type, content) {
   emptyState.classList.add('hidden');
@@ -553,7 +625,6 @@ function renderBotMessage(el, content) {
 }
 
 function formatContent(text) {
-  // Basic markdown: code blocks, inline code
   let html = escapeHtml(text);
   // Code blocks: ```...```
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
@@ -570,10 +641,30 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Status
+// ── Status bar ──────────────────────────────────────────────────────────────
+
 function setStatus(state, text) {
   statusDot.className = `status-dot ${state}`;
   statusText.textContent = text;
+  if (state !== 'ready') statusDetail.textContent = '';
+}
+
+function updateStatusDetail(ms) {
+  const cfg = ms.config;
+  const parts = [`${cfg.ctx_size} ctx`];
+  if (cfg.ngl > 0) parts.push(`${cfg.ngl} GPU layers`);
+  if (cfg.sampling) {
+    const s = cfg.sampling;
+    if (s.temperature != null) parts.push(`temp ${s.temperature}`);
+    if (s.top_p != null) parts.push(`top_p ${s.top_p}`);
+  }
+  if (cfg.system_prompt) {
+    const preview = cfg.system_prompt.length > 50
+      ? cfg.system_prompt.slice(0, 50) + '…'
+      : cfg.system_prompt;
+    parts.push(`prompt: "${preview}"`);
+  }
+  statusDetail.textContent = parts.join(' · ');
 }
 
 function enableChat(enabled) {
@@ -582,7 +673,8 @@ function enableChat(enabled) {
   if (enabled) inputText.focus();
 }
 
-// Loading overlay
+// ── Loading overlay ─────────────────────────────────────────────────────────
+
 function showLoading(text) {
   loadingText.textContent = text;
   loadingSub.textContent = 'This may take 10-30 seconds';
@@ -593,7 +685,8 @@ function hideLoading() {
   loadingOverlay.classList.remove('visible');
 }
 
-// Poll status periodically
+// ── Background status poll ──────────────────────────────────────────────────
+
 async function pollStatus() {
   try {
     const res = await fetch(`${API_BASE}/api/status`);
@@ -605,6 +698,7 @@ async function pollStatus() {
           isReady = true;
           currentModelId = status.active_model;
           setStatus('ready', `${getModelName(status.active_model)} is ready`);
+          updateStatusDetail(ms);
           enableChat(true);
         } else if (ms.state === 'loading') {
           setStatus('loading', 'Loading model...');
@@ -614,13 +708,15 @@ async function pollStatus() {
       }
     }
     renderModelSelect();
-  } catch (e) {}
+  } catch (e) { /* server unreachable */ }
 }
 
-// Helpers
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Init
+// ── Init ────────────────────────────────────────────────────────────────────
+
 fetchModels();
 setInterval(pollStatus, 5000);
 enableChat(false);
