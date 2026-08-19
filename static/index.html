@@ -135,6 +135,54 @@ body {
   border-top: 5px solid var(--text-muted);
   pointer-events: none;
 }
+.agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.2s;
+}
+.agent-toggle:hover {
+  color: var(--text);
+}
+.agent-toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-dark);
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
+}
+.agent-toggle input[type="checkbox"]:checked {
+  background: var(--black);
+  border-color: var(--black);
+}
+.agent-toggle input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 5px;
+  height: 8px;
+  border: solid var(--white);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.agent-toggle input[type="checkbox"]:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.agent-toggle input[type="checkbox"]:disabled + span {
+  opacity: 0.5;
+}
 .btn-load {
   padding: 6px 16px;
   background: var(--black);
@@ -407,6 +455,29 @@ body {
   height: 18px;
 }
 
+.message .agent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 6px 0;
+  line-height: 1.5;
+}
+.message .agent-step .step-icon {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  margin-top: 1px;
+}
+.message .agent-step .step-content {
+  flex: 1;
+  word-break: break-word;
+}
+.message .agent-step .step-tool {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 /* Loading overlay */
 .loading-overlay {
   position: fixed;
@@ -511,6 +582,10 @@ body {
         </select>
       </div>
       <button class="btn-load" id="btnLoad" disabled>Load</button>
+      <label class="agent-toggle" id="agentToggleLabel">
+        <input type="checkbox" id="agentToggle" disabled>
+        <span>🔎 Agent</span>
+      </label>
     </div>
     <button class="btn-theme" id="btnTheme" title="Toggle dark mode">
       <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -617,6 +692,7 @@ let isReady = false;
 let isStreaming = false;
 let messages = [];
 let hasConversation = false;
+let agentMode = false;
 
 // DOM elements
 const modelSelect      = document.getElementById('modelSelect');
@@ -635,6 +711,8 @@ const statusDetail     = document.getElementById('statusDetail');
 const loadingOverlay   = document.getElementById('loadingOverlay');
 const loadingText      = document.getElementById('loadingText');
 const loadingSub       = document.getElementById('loadingSub');
+const agentToggle      = document.getElementById('agentToggle');
+const agentToggleLabel = document.getElementById('agentToggleLabel');
 
 // ── Theme management ────────────────────────────────────────────────────────
 
@@ -698,6 +776,7 @@ function renderModelSelect() {
 
 modelSelect.addEventListener('change', () => {
   btnLoad.disabled = !modelSelect.value;
+  updateAgentToggle();
 });
 
 // ── Load model ──────────────────────────────────────────────────────────────
@@ -755,6 +834,7 @@ async function pollModelReady(modelId) {
         setStatus('ready', `${getModelName(modelId)} is ready`);
         updateStatusDetail(ms);
         enableChat(true);
+        updateAgentToggle();
         btnLoad.disabled = false;
         return;
       }
@@ -832,8 +912,10 @@ function sendMessageFrom(textarea, btn) {
     btnSend.disabled = true;
     btnSendLanding.disabled = true;
 
+    const endpoint = agentMode ? `${API_BASE}/api/agent` : `${API_BASE}/api/chat`;
+
     try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -843,7 +925,7 @@ function sendMessageFrom(textarea, btn) {
       });
 
       if (!res.ok) {
-        let errMsg = 'Chat request failed';
+        let errMsg = 'Request failed';
         try { const e = await res.json(); errMsg = e.error || errMsg; } catch (_) {}
         throw new Error(errMsg);
       }
@@ -862,13 +944,39 @@ function sendMessageFrom(textarea, btn) {
         const lines = buffer.split('\n');
         buffer = lines.pop();
 
+        let currentEvent = '';
         for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+            continue;
+          }
           if (line.startsWith('data: ')) {
             const data = line.slice(6).trim();
             if (data === '[DONE]') continue;
+
+            // Agent mode SSE events.
+            if (currentEvent === 'step') {
+              try {
+                const parsed = JSON.parse(data);
+                if (!thinkingRemoved) {
+                  const el = botMsgEl.querySelector('.thinking');
+                  if (el) el.remove();
+                  thinkingRemoved = true;
+                }
+                renderAgentStep(botMsgEl, parsed);
+              } catch (e) { /* skip */ }
+              currentEvent = '';
+              continue;
+            }
+            if (currentEvent === 'done') {
+              currentEvent = '';
+              continue;
+            }
+
+            // Token events (agent mode 'token' event, or plain chat 'data:' without event).
             try {
               const parsed = JSON.parse(data);
-              const content = parsed.choices?.[0]?.delta?.content;
+              const content = parsed.choices?.[0]?.delta?.content ?? parsed.content;
               if (content) {
                 if (!thinkingRemoved) {
                   const el = botMsgEl.querySelector('.thinking');
@@ -879,6 +987,7 @@ function sendMessageFrom(textarea, btn) {
                 renderBotMessage(botMsgEl, fullResponse);
               }
             } catch (e) { /* skip malformed chunks */ }
+            currentEvent = '';
           }
         }
       }
@@ -960,7 +1069,46 @@ function addThinking(el) {
 }
 
 function renderBotMessage(el, content) {
-  el.innerHTML = formatContent(content);
+  // Preserve agent step elements, only update the answer part.
+  const answerEl = el.querySelector('.agent-answer');
+  if (answerEl) {
+    answerEl.innerHTML = formatContent(content);
+  } else {
+    const stepsContainer = el.querySelector('.agent-steps');
+    if (stepsContainer) {
+      const ans = document.createElement('div');
+      ans.className = 'agent-answer';
+      ans.innerHTML = formatContent(content);
+      el.appendChild(ans);
+    } else {
+      el.innerHTML = formatContent(content);
+    }
+  }
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+function renderAgentStep(el, stepData) {
+  let stepsContainer = el.querySelector('.agent-steps');
+  if (!stepsContainer) {
+    stepsContainer = document.createElement('div');
+    stepsContainer.className = 'agent-steps';
+    el.appendChild(stepsContainer);
+  }
+
+  const stepEl = document.createElement('div');
+  stepEl.className = 'agent-step';
+
+  if (stepData.type === 'action') {
+    const icon = stepData.tool === 'web_search' ? '🔍' : '📄';
+    const label = stepData.tool === 'web_search' ? 'Searching' : 'Reading';
+    stepEl.innerHTML = `<span class="step-icon">${icon}</span><span class="step-content"><span class="step-tool">${label}:</span> ${escapeHtml(stepData.input || '')}</span>`;
+  } else if (stepData.type === 'observation') {
+    const icon = '📋';
+    const preview = (stepData.output || '').substring(0, 200);
+    stepEl.innerHTML = `<span class="step-icon">${icon}</span><span class="step-content"><span class="step-tool">Result:</span> ${escapeHtml(preview)}${(stepData.output || '').length > 200 ? '...' : ''}</span>`;
+  }
+
+  stepsContainer.appendChild(stepEl);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
@@ -1003,6 +1151,8 @@ function enableChat(enabled) {
   btnSendLanding.disabled = !enabled;
   inputText.disabled = !enabled;
   inputTextLanding.disabled = !enabled;
+  agentToggle.disabled = !enabled;
+  if (enabled) updateAgentToggle();
   if (enabled && !hasConversation) {
     inputTextLanding.focus();
   } else if (enabled) {
@@ -1037,6 +1187,7 @@ async function pollStatus() {
           setStatus('ready', `${getModelName(status.active_model)} is ready`);
           updateStatusDetail(ms);
           enableChat(true);
+          updateAgentToggle();
         } else if (ms.state === 'loading') {
           setStatus('loading', 'Loading model...');
         } else if (ms.state === 'error') {
@@ -1046,6 +1197,22 @@ async function pollStatus() {
     }
     renderModelSelect();
   } catch (e) { /* server unreachable */ }
+}
+
+// ── Agent toggle ─────────────────────────────────────────────────────────────
+
+agentToggle.addEventListener('change', () => {
+  agentMode = agentToggle.checked;
+});
+
+function updateAgentToggle() {
+  const cfg = getModelConfig(currentModelId);
+  const capable = cfg ? (cfg.agent_capable !== false) : false;
+  agentToggle.disabled = !isReady || !capable;
+  if (!capable) {
+    agentToggle.checked = false;
+    agentMode = false;
+  }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
