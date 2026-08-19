@@ -21,6 +21,7 @@ A lightweight, self-hosted web application for running and chatting with local G
 - [Usage](#-usage)
   - [Starting the Server](#starting-the-server)
   - [Using the Web Interface](#using-the-web-interface)
+  - [Agent Mode](#agent-mode)
   - [API Reference](#api-reference)
 - [Project Structure](#-project-structure)
 - [Troubleshooting](#-troubleshooting)
@@ -34,6 +35,9 @@ A lightweight, self-hosted web application for running and chatting with local G
 
 - **Model Management** — Load/unload models on demand, one at a time to conserve RAM
 - **Streaming Chat** — Real-time token-by-token response streaming via Server-Sent Events (SSE)
+- **Agent Mode** — ReAct-style reasoning loop with `web_search` and `fetch_url` tools for questions needing current information
+- **Web Search** — Built-in DuckDuckGo search integration (no API key required)
+- **SSRF Protection** — Agent's `fetch_url` blocks private/loopback IPs to prevent self-targeting
 - **Dark Theme UI** — Clean, minimal interface that's easy on the eyes
 - **Zero Dependencies** — No npm, no webpack, no Docker. Just Go + static HTML
 - **Extensible** — Add new models by editing a single JSON file
@@ -300,6 +304,27 @@ The server starts on **http://localhost:3000** by default.
 - `Enter` — Send message
 - `Shift+Enter` — New line in message
 
+### Agent Mode
+
+Agent mode enables the assistant to search the web and fetch URLs to answer questions that need current information.
+
+1. **Enable agent mode** → Toggle the "🔎 Agent" checkbox next to the model selector
+2. **Ask a question** → The model will reason step-by-step, using tools as needed
+3. **Watch the process** → Search/read steps appear as visual chips above the answer
+4. **Get the answer** → The final answer streams token-by-token like normal chat
+
+**How it works:**
+- The model uses a ReAct (Reasoning + Acting) loop with up to 5 tool calls
+- `web_search` — Searches DuckDuckGo (no API key needed)
+- `fetch_url` — Reads a web page's text content
+- Tool observations are fed back to the model for continued reasoning
+- If the model already knows the answer, it skips tools entirely
+
+**Per-model configuration:**
+- Each model has an `agent_capable` flag in `models.json`
+- The Agent toggle is automatically disabled for models that can't use it
+- All current models are instruct-tuned and support agent mode
+
 ### API Reference
 
 All endpoints are served on `http://localhost:3000`.
@@ -393,6 +418,51 @@ data: [DONE]
 - `503` — Model not loaded (send `/api/load` first)
 - `502` — llama-server connection failed
 
+#### POST /api/agent
+
+Run an agent-mode chat with tool use (web search, URL fetching). Uses a ReAct-style reasoning loop.
+
+**Request:**
+```json
+{
+  "model_id": "phi4-mini",
+  "messages": [
+    { "role": "user", "content": "What's the latest news about Go 1.24?" }
+  ]
+}
+```
+
+**Response:** Server-Sent Events (SSE) stream with named events:
+```
+event: step
+data: {"type":"action","tool":"web_search","input":"Go 1.24 latest news"}
+
+event: step
+data: {"type":"observation","tool":"web_search","output":"1. Go 1.24 Released...\n  https://go.dev/...\n  ..."}
+
+event: token
+data: {"content":"Go 1.24 was"}
+
+event: token
+data: {"content":" released"}
+
+event: done
+data: {}
+```
+
+**SSE Event Types:**
+- `event: step` — Agent action or observation (tool use progress)
+- `event: token` — Final answer streaming token
+- `event: done` — Stream complete
+
+**Agent Loop:**
+1. Model reasons about the question (up to 5 iterations)
+2. May call `web_search` or `fetch_url` tools
+3. Observations are fed back to the model
+4. Final answer is streamed token-by-token
+
+**Error responses:** Same as `/api/chat`.
+
 ---
 
 ## 📁 Project Structure
@@ -400,6 +470,8 @@ data: [DONE]
 ```
 llm-chat/
 ├── main.go              # Go backend (API + process management)
+├── agent.go             # Agent loop (ReAct-style reasoning with tools)
+├── tools.go             # Tool registry (web_search, fetch_url)
 ├── models.json          # Model configuration file
 ├── go.mod               # Go module definition
 ├── go.sum               # Go dependency checksums
@@ -411,13 +483,26 @@ llm-chat/
 
 ### File Descriptions
 
-**main.go** (~300 lines)
+**main.go** (~400 lines)
 - HTTP server on port 3000
 - Model config loading from JSON
 - Subprocess management (spawn/kill llama-server)
 - Health check polling
 - SSE proxy for streaming chat
 - Graceful shutdown handler
+
+**agent.go** (~400 lines)
+- ReAct-style reasoning loop (max 5 iterations)
+- Parses `Thought:` / `Action:` / `Action Input:` / `Final Answer:` from model output
+- Dispatches to registered tools, feeds Observations back
+- Streams SSE events (step, token, done) to the frontend
+- 2-minute total timeout, 60s per-llama-call, 15s per-tool-call
+
+**tools.go** (~320 lines)
+- Tool registry with `BuiltinTools()` returning `web_search` and `fetch_url`
+- `web_search`: Scrapes DuckDuckGo HTML endpoint, rate-limited (1 req/sec)
+- `fetch_url`: Fetches URL with SSRF protection (blocks private/loopback IPs)
+- Both return user-friendly error strings for the agent loop
 
 **models.json**
 - Array of model configurations
