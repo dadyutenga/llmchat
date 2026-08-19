@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -79,11 +82,16 @@ type Server struct {
 var llamaServerBin string
 
 func main() {
+	modelsDir := flag.String("models-dir", "", "Directory to scan for .gguf model files (default: ../models)")
+	modelsFile := flag.String("models-config", "models.json", "Path to models.json for per-model overrides")
+	addr := flag.String("addr", ":3000", "Listen address")
+	flag.Parse()
+
 	llamaServerBin = findLlamaServer()
 
-	models, err := loadModels("models.json")
+	models, err := discoverModels(*modelsDir, *modelsFile)
 	if err != nil {
-		log.Fatalf("Failed to load models.json: %v", err)
+		log.Fatalf("Failed to load models: %v", err)
 	}
 
 	srv := &Server{
@@ -111,12 +119,11 @@ func main() {
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.Handle("/", http.FileServer(http.Dir("static")))
 
-	addr := ":3000"
-	log.Printf("Starting server on %s", addr)
+	log.Printf("Starting server on %s", *addr)
 	log.Printf("llama-server binary: %s", llamaServerBin)
 	log.Printf("Loaded %d model configs", len(models))
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
@@ -139,7 +146,164 @@ func findLlamaServer() string {
 	return "llama-server"
 }
 
-// loadModels reads and validates models.json.
+// discoverModels scans a directory for .gguf files and merges with models.json overrides.
+func discoverModels(dir, configPath string) ([]ModelConfig, error) {
+	// Resolve default models directory.
+	if dir == "" {
+		dir = "../models"
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid models dir: %w", err)
+	}
+
+	// Load JSON overrides if the file exists.
+	overrides := loadOverrides(configPath)
+
+	// Scan directory for .gguf files.
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read models directory %s: %w", absDir, err)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	var models []ModelConfig
+	port := 8081
+	re := regexp.MustCompile(`[^a-zA-Z0-9-]+`)
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".gguf") {
+			continue
+		}
+
+		fullPath := filepath.Join(absDir, e.Name())
+		baseName := strings.TrimSuffix(e.Name(), ".gguf")
+		baseName = strings.TrimSuffix(baseName, ".GGUF")
+		id := re.ReplaceAllString(strings.ToLower(baseName), "-")
+		// Collapse consecutive hyphens and trim.
+		for strings.Contains(id, "--") {
+			id = strings.ReplaceAll(id, "--", "-")
+		}
+		id = strings.Trim(id, "-")
+		if id == "" {
+			continue
+		}
+
+		name := cleanDisplayName(baseName)
+
+		m := ModelConfig{
+			ID:      id,
+			Name:    name,
+			Path:    fullPath,
+			Port:    port,
+			CtxSize: 4096,
+			NGL:     0,
+		}
+		port++
+
+		// Apply JSON overrides if present.
+		if ov, ok := overrides[id]; ok {
+			applyOverride(&m, ov)
+		}
+
+		if _, err := os.Stat(m.Path); err != nil {
+			log.Printf("WARNING: Model file not found: %s (%s)", m.ID, m.Path)
+		}
+
+		models = append(models, m)
+	}
+
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no .gguf files found in %s", absDir)
+	}
+
+	// Also include any JSON-only models not found by the scan (manual entries).
+	scannedIDs := make(map[string]bool, len(models))
+	for _, m := range models {
+		scannedIDs[m.ID] = true
+	}
+	for id, ov := range overrides {
+		if scannedIDs[id] {
+			continue
+		}
+		m := ModelConfig{
+			ID:      id,
+			Name:    id,
+			Path:    ov.Path,
+			Port:    port,
+			CtxSize: 4096,
+			NGL:     0,
+		}
+		port++
+		applyOverride(&m, ov)
+		models = append(models, m)
+	}
+
+	return models, nil
+}
+
+// loadOverrides reads models.json into a map keyed by ID.
+func loadOverrides(path string) map[string]*ModelConfig {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var list []ModelConfig
+	if err := json.Unmarshal(data, &list); err != nil {
+		log.Printf("WARNING: Failed to parse %s: %v", path, err)
+		return nil
+	}
+	m := make(map[string]*ModelConfig, len(list))
+	for i := range list {
+		m[list[i].ID] = &list[i]
+	}
+	return m
+}
+
+// applyOverride copies non-zero fields from ov into m.
+func applyOverride(m *ModelConfig, ov *ModelConfig) {
+	if ov.Name != "" {
+		m.Name = ov.Name
+	}
+	if ov.Path != "" {
+		m.Path = ov.Path
+	}
+	if ov.Port != 0 {
+		m.Port = ov.Port
+	}
+	if ov.CtxSize != 0 {
+		m.CtxSize = ov.CtxSize
+	}
+	if ov.NGL != 0 {
+		m.NGL = ov.NGL
+	}
+	if ov.SystemPrompt != "" {
+		m.SystemPrompt = ov.SystemPrompt
+	}
+	if ov.Sampling != nil {
+		m.Sampling = ov.Sampling
+	}
+	if len(ov.ExtraArgs) > 0 {
+		m.ExtraArgs = ov.ExtraArgs
+	}
+}
+
+// cleanDisplayName turns a filename like "Llama-3.2-3B-Instruct-Q5_K_M"
+// into a human-friendly "Llama 3.2 3B Instruct Q5 K M".
+func cleanDisplayName(s string) string {
+	s = strings.ReplaceAll(s, "_", " ")
+	s = strings.ReplaceAll(s, "-", " ")
+	// Collapse multiple spaces.
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.TrimSpace(s)
+}
+
+// loadModels reads and validates models.json (kept for backwards compatibility).
 func loadModels(path string) ([]ModelConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

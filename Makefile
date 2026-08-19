@@ -3,6 +3,7 @@
 BINARY_NAME=llm-chat
 LLAMA_CPP_PATH=$(HOME)/llama.cpp/build/bin
 PORT=3000
+MODELS_DIR=$(abspath ../models)
 
 # Build the application
 build:
@@ -11,11 +12,11 @@ build:
 
 # Run the application
 run: build
-	PATH="$(LLAMA_CPP_PATH):$(PATH)" ./$(BINARY_NAME)
+	PATH="$(LLAMA_CPP_PATH):$(PATH)" ./$(BINARY_NAME) --models-dir "$(MODELS_DIR)"
 
 # Run in development mode (with go run)
 dev:
-	PATH="$(LLAMA_CPP_PATH):$(PATH)" go run main.go
+	PATH="$(LLAMA_CPP_PATH):$(PATH)" go run main.go --models-dir "$(MODELS_DIR)"
 
 # Clean build artifacts
 clean:

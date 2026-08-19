@@ -29,12 +29,18 @@ else
     echo -e "${GREEN}✅ llama-server found at: $LLAMA_SERVER${NC}"
 fi
 
-# Check models.json
-if [ ! -f "models.json" ]; then
-    echo -e "${RED}❌ models.json not found!${NC}"
+# Check models directory
+MODELS_DIR="${MODELS_DIR:-$(dirname "$(pwd)")/models}"
+if [ ! -d "$MODELS_DIR" ]; then
+    echo -e "${RED}❌ Models directory not found: $MODELS_DIR${NC}"
+    echo "Set MODELS_DIR or place .gguf files in ../models/"
     exit 1
 fi
-echo -e "${GREEN}✅ models.json found${NC}"
+GGUF_COUNT=$(find "$MODELS_DIR" -maxdepth 1 -name "*.gguf" -o -name "*.GGUF" 2>/dev/null | wc -l)
+if [ "$GGUF_COUNT" -eq 0 ]; then
+    echo -e "${YELLOW}⚠️  No .gguf files found in $MODELS_DIR${NC}"
+fi
+echo -e "${GREEN}✅ Models directory: $MODELS_DIR ($GGUF_COUNT models)${NC}"
 
 # Check if port is available
 PORT=3000
@@ -63,4 +69,4 @@ echo ""
 echo -e "${GREEN}🚀 Starting server on http://localhost:$PORT${NC}"
 echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
 echo ""
-./llm-chat
+./llm-chat --models-dir "$MODELS_DIR"

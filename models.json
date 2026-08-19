@@ -1,12 +1,23 @@
 [
   {
-    "id": "phi4-mini",
-    "name": "Phi-4 Mini Instruct",
-    "path": "/home/dadi/projects/models/phi4-mini/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
-    "port": 8081,
+    "id": "gemma4-coding-q2-k",
+    "name": "Gemma 4 Coding (Q2_K)",
     "ctx_size": 4096,
-    "ngl": 0,
-    "system_prompt": "You are a helpful, precise, and friendly AI assistant. Give clear, direct answers. When appropriate, provide brief explanations to help the user understand.",
+    "system_prompt": "You are a skilled programming assistant. Write clean, efficient, and correct code. When explaining, be direct and focus on the key points. Use code blocks with the appropriate language tag for all code.",
+    "sampling": {
+      "temperature": 0.5,
+      "top_p": 0.9,
+      "top_k": 40,
+      "repeat_penalty": 1.1,
+      "min_p": 0.05,
+      "max_tokens": 2048
+    }
+  },
+  {
+    "id": "llama-3-2-3b-instruct-q5-k-m",
+    "name": "Llama 3.2 3B Instruct (Q5_K_M)",
+    "ctx_size": 4096,
+    "system_prompt": "You are a helpful, knowledgeable, and friendly AI assistant. Provide clear, concise, and accurate responses. When you are unsure, say so rather than guessing.",
     "sampling": {
       "temperature": 0.7,
       "top_p": 0.9,
@@ -14,17 +25,27 @@
       "repeat_penalty": 1.1,
       "min_p": 0.05,
       "max_tokens": 2048
-    },
-    "extra_args": []
+    }
   },
   {
-    "id": "mistral-7b",
-    "name": "Mistral 7B Instruct v0.3",
-    "path": "/home/dadi/projects/models/mistral-7b/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
-    "port": 8082,
+    "id": "microsoft-phi-4-mini-instruct-q4-k-m",
+    "name": "Phi-4 Mini Instruct (Q4_K_M)",
+    "ctx_size": 4096,
+    "system_prompt": "You are a helpful, precise, and friendly AI assistant. Think step by step when solving problems. Give clear, direct answers with brief explanations when they help the user understand.",
+    "sampling": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 50,
+      "repeat_penalty": 1.1,
+      "min_p": 0.05,
+      "max_tokens": 2048
+    }
+  },
+  {
+    "id": "mistral-7b-instruct-v0-3-q4-k-m",
+    "name": "Mistral 7B Instruct v0.3 (Q4_K_M)",
     "ctx_size": 8192,
-    "ngl": 0,
-    "system_prompt": "You are Mistral, a knowledgeable and helpful AI assistant. Provide accurate, well-structured responses. Be concise but thorough when the question warrants it.",
+    "system_prompt": "You are Mistral, a knowledgeable and thoughtful AI assistant. Provide accurate, well-structured responses. Be concise for simple questions and thorough when the topic warrants depth. Use markdown formatting when it improves readability.",
     "sampling": {
       "temperature": 0.7,
       "top_p": 0.9,
@@ -32,7 +53,20 @@
       "repeat_penalty": 1.1,
       "min_p": 0.05,
       "max_tokens": 4096
-    },
-    "extra_args": []
+    }
+  },
+  {
+    "id": "qwen2-5-coder-7b-instruct-q5-k-s",
+    "name": "Qwen 2.5 Coder 7B Instruct (Q5_K_S)",
+    "ctx_size": 8192,
+    "system_prompt": "You are an expert software engineer and programming assistant. Write clean, production-quality code with proper error handling. Follow best practices and idioms for each language. Explain your design decisions when asked. Always use code blocks with language tags.",
+    "sampling": {
+      "temperature": 0.5,
+      "top_p": 0.9,
+      "top_k": 40,
+      "repeat_penalty": 1.1,
+      "min_p": 0.05,
+      "max_tokens": 4096
+    }
   }
 ]
