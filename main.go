@@ -41,6 +41,7 @@ type ModelConfig struct {
 	CtxSize      int             `json:"ctx_size"`
 	NGL          int             `json:"ngl"`
 	SystemPrompt string          `json:"system_prompt,omitempty"`
+	AgentCapable bool            `json:"agent_capable,omitempty"`
 	Sampling     *SamplingConfig `json:"sampling,omitempty"`
 	ExtraArgs    []string        `json:"extra_args,omitempty"`
 }
@@ -117,6 +118,7 @@ func main() {
 	mux.HandleFunc("/api/load", srv.handleLoad)
 	mux.HandleFunc("/api/unload", srv.handleUnload)
 	mux.HandleFunc("/api/chat", srv.handleChat)
+	mux.HandleFunc("/api/agent", srv.handleAgentChat)
 	mux.Handle("/", http.FileServer(http.Dir("static")))
 
 	log.Printf("Starting server on %s", *addr)
