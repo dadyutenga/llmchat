@@ -417,6 +417,17 @@ body {
   width: 20px;
   height: 20px;
 }
+.input-icon-btn.web-active {
+  background: var(--black);
+  color: var(--white);
+}
+.input-icon-btn.web-active:hover {
+  background: var(--text-secondary);
+}
+.input-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
 .input-box textarea {
   flex: 1;
   padding: 8px 4px;
@@ -700,6 +711,8 @@ const btnLoad          = document.getElementById('btnLoad');
 const btnSend          = document.getElementById('btnSend');
 const btnSendLanding   = document.getElementById('btnSendLanding');
 const btnTheme         = document.getElementById('btnTheme');
+const btnWeb           = document.getElementById('btnWeb');
+const btnWeb2          = document.getElementById('btnWeb2');
 const inputText        = document.getElementById('inputText');
 const inputTextLanding = document.getElementById('inputTextLanding');
 const messagesDiv      = document.getElementById('messages');
@@ -1153,6 +1166,7 @@ function enableChat(enabled) {
   inputTextLanding.disabled = !enabled;
   agentToggle.disabled = !enabled;
   if (enabled) updateAgentToggle();
+  updateWebButtons();
   if (enabled && !hasConversation) {
     inputTextLanding.focus();
   } else if (enabled) {
@@ -1203,7 +1217,38 @@ async function pollStatus() {
 
 agentToggle.addEventListener('change', () => {
   agentMode = agentToggle.checked;
+  updateWebButtons();
 });
+
+function toggleAgentMode() {
+  const cfg = getModelConfig(currentModelId);
+  const capable = cfg ? (cfg.agent_capable !== false) : false;
+  if (!isReady || !capable) return;
+
+  agentMode = !agentMode;
+  agentToggle.checked = agentMode;
+  updateWebButtons();
+}
+
+function updateWebButtons() {
+  const cfg = getModelConfig(currentModelId);
+  const capable = cfg ? (cfg.agent_capable !== false) : false;
+  const disabled = !isReady || !capable;
+
+  btnWeb.disabled = disabled;
+  btnWeb2.disabled = disabled;
+
+  if (agentMode) {
+    btnWeb.classList.add('web-active');
+    btnWeb2.classList.add('web-active');
+  } else {
+    btnWeb.classList.remove('web-active');
+    btnWeb2.classList.remove('web-active');
+  }
+}
+
+btnWeb.addEventListener('click', toggleAgentMode);
+btnWeb2.addEventListener('click', toggleAgentMode);
 
 function updateAgentToggle() {
   const cfg = getModelConfig(currentModelId);
@@ -1213,6 +1258,7 @@ function updateAgentToggle() {
     agentToggle.checked = false;
     agentMode = false;
   }
+  updateWebButtons();
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
